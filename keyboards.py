@@ -45,9 +45,14 @@ class AdminReviewCallback(CallbackData, prefix="admin_review"):
     review_id: int
 
 
-# --- НОВЫЙ CALLBACK ДЛЯ РАССЫЛКИ ---
 class AdminMailingCallback(CallbackData, prefix="admin_mail"):
     action: str  # 'send', 'cancel'
+
+
+# --- НОВЫЙ CALLBACK ДЛЯ УПРАВЛЕНИЯ ПЛАТЕЖАМИ ---
+class AdminPaymentCallback(CallbackData, prefix="admin_payment"):
+    action: str  # 'prev', 'next'
+    work_id: int
 
 
 class WorkPaginationCallback(CallbackData, prefix="work_pag"):
@@ -305,12 +310,23 @@ def get_admin_stats_kb() -> InlineKeyboardMarkup:
     )
     return builder.as_markup()
 
-# --- НОВАЯ КЛАВИАТУРА ДЛЯ ПОДТВЕРЖДЕНИЯ РАССЫЛКИ ---
 def get_admin_mailing_confirm_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="✅ Отправить всем", callback_data=AdminMailingCallback(action="send").pack()),
         InlineKeyboardButton(text="❌ Отмена", callback_data=AdminMailingCallback(action="cancel").pack())
+    )
+    return builder.as_markup()
+
+# --- НОВАЯ КЛАВИАТУРА ДЛЯ ПАГИНАЦИИ ПЛАТЕЖЕЙ ---
+def get_admin_payment_keyboard(work_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="⬅️", callback_data=AdminPaymentCallback(action="prev", work_id=work_id).pack()),
+        InlineKeyboardButton(text="➡️", callback_data=AdminPaymentCallback(action="next", work_id=work_id).pack())
+    )
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data=AdminMenuCallback(action="main").pack())
     )
     return builder.as_markup()
 

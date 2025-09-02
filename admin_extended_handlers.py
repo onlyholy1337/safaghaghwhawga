@@ -11,7 +11,8 @@ import logging
 from keyboards import (get_admin_category_manage_kb, AdminMenuCallback,
                        AdminCategoryCallback, get_admin_main_kb, AdminReviewCallback,
                        get_admin_review_keyboard, get_admin_stats_kb,
-                       AdminMailingCallback, get_admin_mailing_confirm_kb)
+                       AdminMailingCallback, get_admin_mailing_confirm_kb,
+                       AdminPaymentCallback, get_admin_payment_keyboard)  # Добавили импорты
 from database import Category, Review, User, MasterProfile, TattooWork
 from states import AdminCategoryManagement, AdminReviewManagement, AdminMailing
 from admin_handlers import IsAdmin
@@ -32,9 +33,7 @@ async def back_to_main_admin_menu(query: CallbackQuery, state: FSMContext):
     )
 
 
-@router.callback_query(AdminMenuCallback.filter(F.action.in_([
-    "work_management", "payment_management"
-])))
+@router.callback_query(AdminMenuCallback.filter(F.action == "work_management"))
 async def section_in_development(query: CallbackQuery):
     await query.answer("Этот раздел находится в разработке.", show_alert=True)
 
@@ -100,13 +99,10 @@ async def delete_category(query: CallbackQuery, callback_data: AdminCategoryCall
 # --- УПРАВЛЕНИЕ ОТЗЫВАМИ ---
 
 async def get_review_info_text(review: Review, session: AsyncSession) -> str:
-    """Формирует красивый текст для отображения отзыва."""
     client = await session.get(User, review.client_id)
     master_profile = await session.get(MasterProfile, review.master_id)
     master_user = await session.get(User, master_profile.user_id)
-
     rating_stars = "⭐" * review.rating + "☆" * (5 - review.rating)
-
     return (
         f"<b>Отзыв #{review.id}</b>\n\n"
         f"<b>Клиент:</b> @{client.username} (ID: <code>{client.telegram_id}</code>)\n"
@@ -120,7 +116,6 @@ async def get_review_info_text(review: Review, session: AsyncSession) -> str:
 
 async def show_review_for_admin(query: CallbackQuery, session: AsyncSession, review_id: int = None,
                                 direction: str = 'first'):
-    """Отображает отзыв админу с пагинацией."""
     stmt = None
     if direction == 'first':
         stmt = select(Review).order_by(desc(Review.id)).limit(1)
@@ -128,16 +123,13 @@ async def show_review_for_admin(query: CallbackQuery, session: AsyncSession, rev
         stmt = select(Review).where(Review.id < review_id).order_by(desc(Review.id)).limit(1)
     elif direction == 'prev':
         stmt = select(Review).where(Review.id > review_id).order_by(asc(Review.id)).limit(1)
-
     review = await session.scalar(stmt)
-
     if not review:
         if direction == 'first':
             await query.message.edit_text("Отзывов пока нет.")
         else:
             await query.answer("Это крайний отзыв в списке.", show_alert=True)
         return
-
     text = await get_review_info_text(review, session)
     keyboard = get_admin_review_keyboard(review.id)
     await query.message.edit_text(text, reply_markup=keyboard)
@@ -176,19 +168,15 @@ async def process_review_reply(message: Message, state: FSMContext, session: Asy
     data = await state.get_data()
     review_id = data.get("review_id")
     reply_text = message.text
-
     review = await session.get(Review, review_id)
     if not review:
         await message.answer("Ошибка: не удалось найти отзыв для ответа.")
         await state.clear()
         return
-
     review.admin_reply = reply_text
     await session.commit()
     await state.clear()
-
     await message.answer("✅ Ваш ответ сохранен и отправлен мастеру.")
-
     try:
         master_profile = await session.get(MasterProfile, review.master_id)
         master_user = await session.get(User, master_profile.user_id)
@@ -207,15 +195,12 @@ async def show_statistics(query: CallbackQuery, session: AsyncSession):
     total_users = await session.scalar(select(func.count(User.id)))
     total_masters = await session.scalar(select(func.count(User.id)).where(User.role == 'master'))
     total_clients = await session.scalar(select(func.count(User.id)).where(User.role == 'client'))
-
     total_works = await session.scalar(select(func.count(TattooWork.id)))
     published_works = await session.scalar(select(func.count(TattooWork.id)).where(TattooWork.status == 'published'))
     pending_works = await session.scalar(
         select(func.count(TattooWork.id)).where(TattooWork.status == 'pending_approval'))
     rejected_works = await session.scalar(select(func.count(TattooWork.id)).where(TattooWork.status == 'rejected'))
-
     total_reviews = await session.scalar(select(func.count(Review.id)))
-
     stats_text = (
         "📊 <b>Статистика Маркетплейса</b>\n\n"
         "👥 <b>Пользователи:</b>\n"
@@ -230,7 +215,6 @@ async def show_statistics(query: CallbackQuery, session: AsyncSession):
         "⭐️ <b>Отзывы:</b>\n"
         f"  - Всего оставлено: <b>{total_reviews}</b>"
     )
-
     await query.message.edit_text(stats_text, reply_markup=get_admin_stats_kb())
     await query.answer()
 
@@ -252,7 +236,6 @@ async def start_mailing(query: CallbackQuery, state: FSMContext):
 async def mailing_content_received(message: Message, state: FSMContext):
     await state.update_data(text=message.html_text)
     await state.set_state(AdminMailing.waiting_for_confirmation)
-
     await message.answer(
         "<b>Предпросмотр сообщения:</b>\n\n"
         f"{message.html_text}\n\n"
@@ -273,15 +256,11 @@ async def process_mailing(query: CallbackQuery, state: FSMContext, session: Asyn
     data = await state.get_data()
     text = data.get("text")
     await state.clear()
-
     await query.message.edit_text("⏳ Начинаю рассылку...", reply_markup=None)
-
     users_result = await session.execute(select(User.telegram_id))
     user_ids = users_result.scalars().all()
-
     successful_sends = 0
     failed_sends = 0
-
     for user_id in user_ids:
         try:
             await query.bot.send_message(chat_id=user_id, text=text, disable_web_page_preview=True)
@@ -290,9 +269,63 @@ async def process_mailing(query: CallbackQuery, state: FSMContext, session: Asyn
             failed_sends += 1
             logging.error(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
         await asyncio.sleep(0.1)
-
     await query.message.answer(
         "✅ <b>Рассылка завершена.</b>\n\n"
         f"Успешно отправлено: <b>{successful_sends}</b>\n"
         f"Ошибок: <b>{failed_sends}</b>"
     )
+
+
+# --- НОВЫЙ БЛОК: УПРАВЛЕНИЕ ПЛАТЕЖАМИ ---
+
+async def get_payment_info_text(work: TattooWork, session: AsyncSession) -> str:
+    master_profile = await session.get(MasterProfile, work.master_id)
+    master_user = await session.get(User, master_profile.user_id)
+
+    return (
+        f"🧾 <b>Платеж за работу #{work.id}</b>\n\n"
+        f"<b>Мастер:</b> @{master_user.username} (ID: <code>{master_user.telegram_id}</code>)\n"
+        f"<b>Invoice ID:</b> <code>{work.invoice_id}</code>\n"
+        f"<b>Сумма:</b> {int(work.price)} руб.\n"
+        f"<b>Дата:</b> {work.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+        f"<b>Текущий статус работы:</b> {work.status}"
+    )
+
+
+async def show_payment_for_admin(query: CallbackQuery, session: AsyncSession, work_id: int = None,
+                                 direction: str = 'first'):
+    stmt = None
+    paid_statuses = ['pending_approval', 'published', 'rejected']
+
+    if direction == 'first':
+        stmt = select(TattooWork).where(TattooWork.status.in_(paid_statuses)).order_by(desc(TattooWork.id)).limit(1)
+    elif direction == 'next':
+        stmt = select(TattooWork).where(TattooWork.id < work_id, TattooWork.status.in_(paid_statuses)).order_by(
+            desc(TattooWork.id)).limit(1)
+    elif direction == 'prev':
+        stmt = select(TattooWork).where(TattooWork.id > work_id, TattooWork.status.in_(paid_statuses)).order_by(
+            asc(TattooWork.id)).limit(1)
+
+    work = await session.scalar(stmt)
+
+    if not work:
+        if direction == 'first':
+            await query.message.edit_text("Проведенных платежей пока нет.")
+        else:
+            await query.answer("Это крайний платеж в списке.", show_alert=True)
+        return
+
+    text = await get_payment_info_text(work, session)
+    keyboard = get_admin_payment_keyboard(work.id)
+    await query.message.edit_text(text, reply_markup=keyboard)
+    await query.answer()
+
+
+@router.callback_query(AdminMenuCallback.filter(F.action == "payment_management"))
+async def start_payment_management(query: CallbackQuery, session: AsyncSession):
+    await show_payment_for_admin(query, session, direction='first')
+
+
+@router.callback_query(AdminPaymentCallback.filter(F.action.in_(['prev', 'next'])))
+async def paginate_payments(query: CallbackQuery, callback_data: AdminPaymentCallback, session: AsyncSession):
+    await show_payment_for_admin(query, session, work_id=callback_data.work_id, direction=callback_data.action)
