@@ -379,6 +379,7 @@ async def toggle_like(query: CallbackQuery, callback_data: LikeCallback, session
 
     await session.commit()
 
+    # --- ИСПРАВЛЕНИЕ: ДОБАВЛЯЕМ ПОЛУЧЕНИЕ СЧЕТЧИКА КОММЕНТАРИЕВ ---
     comments_count = await session.scalar(select(func.count(Comment.id)).where(Comment.work_id == work.id))
 
     keyboard = get_pagination_kb(
