@@ -1,16 +1,18 @@
+# database.py
+
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy import (BigInteger, String, Text, ForeignKey, Integer, DECIMAL,
-                          JSON as SA_JSON, DateTime, func, PrimaryKeyConstraint)
+                        JSON as SA_JSON, DateTime, func, PrimaryKeyConstraint)
 from typing import List
 from datetime import datetime
 
 from config import settings
 
-
 engine = create_async_engine(settings.db_dsn, echo=True)
 
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
 
 class Base(DeclarativeBase):
     pass
@@ -24,6 +26,7 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(150))
     role: Mapped[str] = mapped_column(String(50), default='client')
 
+
 class MasterProfile(Base):
     __tablename__ = 'master_profiles'
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -32,8 +35,8 @@ class MasterProfile(Base):
     city: Mapped[str] = mapped_column(String(100), nullable=True)
     social_links: Mapped[List[dict]] = mapped_column(SA_JSON, nullable=True)
     is_active: Mapped[bool] = mapped_column(default=True)
-    # Добавлено отсутствующее поле rating
     rating: Mapped[float] = mapped_column(DECIMAL(3, 2), nullable=True, default=0.0)
+
 
 class Category(Base):
     __tablename__ = 'categories'
@@ -55,6 +58,8 @@ class TattooWork(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
     category: Mapped["Category"] = relationship()
+    # --- НОВАЯ СВЯЗЬ ДЛЯ КОММЕНТАРИЕВ ---
+    comments: Mapped[List["Comment"]] = relationship(back_populates="work", cascade="all, delete-orphan")
 
 
 class Review(Base):
@@ -77,6 +82,19 @@ class Like(Base):
     __table_args__ = (
         PrimaryKeyConstraint('user_id', 'work_id'),
     )
+
+
+# --- НОВАЯ ТАБЛИЦА ДЛЯ КОММЕНТАРИЕВ ---
+class Comment(Base):
+    __tablename__ = 'comments'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    work_id: Mapped[int] = mapped_column(ForeignKey('tattoo_works.id'))
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    work: Mapped["TattooWork"] = relationship(back_populates="comments")
+    user: Mapped["User"] = relationship()
 
 
 async def create_tables():

@@ -49,7 +49,6 @@ class AdminMailingCallback(CallbackData, prefix="admin_mail"):
     action: str  # 'send', 'cancel'
 
 
-# --- НОВЫЙ CALLBACK ДЛЯ УПРАВЛЕНИЯ ПЛАТЕЖАМИ ---
 class AdminPaymentCallback(CallbackData, prefix="admin_payment"):
     action: str  # 'prev', 'next'
     work_id: int
@@ -65,6 +64,20 @@ class LikeCallback(CallbackData, prefix="like"):
     action: str
     work_id: int
 
+
+# --- НОВЫЕ CALLBACKS ДЛЯ КОММЕНТАРИЕВ ---
+class CommentCallback(CallbackData, prefix="comment"):
+    action: str  # 'create', 'view'
+    work_id: int
+
+
+class CommentPaginationCallback(CallbackData, prefix="comm_pag"):
+    action: str  # 'prev', 'next'
+    work_id: int
+    page: int
+
+
+# -----------------------------------------
 
 class ReviewCallback(CallbackData, prefix="review"):
     action: str
@@ -191,15 +204,18 @@ def get_category_filter_kb(categories: List[Category]) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+# --- ИЗМЕНЕННАЯ КЛАВИАТУРА ПРОСМОТРА РАБОТЫ ---
 def get_pagination_kb(
         current_work_id: int,
         master_id: int,
         likes_count: int,
         is_liked: bool,
+        comments_count: int,  # Добавили счетчик комментариев
         category_id: Optional[int] = None
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
+    # Кнопки пагинации "вперед-назад"
     builder.row(
         InlineKeyboardButton(
             text="⬅️",
@@ -213,6 +229,7 @@ def get_pagination_kb(
         )
     )
 
+    # Кнопки лайка и отзыва
     like_text = f"❤️ {likes_count}" if not is_liked else f"💔 {likes_count}"
     builder.row(
         InlineKeyboardButton(
@@ -220,11 +237,24 @@ def get_pagination_kb(
             callback_data=LikeCallback(action="toggle", work_id=current_work_id).pack()
         ),
         InlineKeyboardButton(
-            text="💬 Оставить отзыв",
+            text="⭐️ Оставить отзыв",
             callback_data=ReviewCallback(action="create", work_id=current_work_id).pack()
         )
     )
 
+    # --- НОВЫЕ КНОПКИ КОММЕНТАРИЕВ ---
+    builder.row(
+        InlineKeyboardButton(
+            text=f"💬 Комментарии ({comments_count})",
+            callback_data=CommentCallback(action="view", work_id=current_work_id).pack()
+        ),
+        InlineKeyboardButton(
+            text="✍️ Комментировать",
+            callback_data=CommentCallback(action="create", work_id=current_work_id).pack()
+        )
+    )
+
+    # Кнопка профиля мастера
     builder.row(
         InlineKeyboardButton(
             text="👤 Профиль мастера",
@@ -232,6 +262,9 @@ def get_pagination_kb(
         )
     )
     return builder.as_markup()
+
+
+# -----------------------------------------
 
 
 def get_my_works_pagination_kb(work_id: int) -> InlineKeyboardMarkup:
@@ -288,6 +321,7 @@ def get_admin_category_manage_kb(categories: List[Category]) -> InlineKeyboardMa
     )
     return builder.as_markup()
 
+
 def get_admin_review_keyboard(review_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
@@ -295,13 +329,16 @@ def get_admin_review_keyboard(review_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="➡️", callback_data=AdminReviewCallback(action="next", review_id=review_id).pack())
     )
     builder.row(
-        InlineKeyboardButton(text="💬 Ответить", callback_data=AdminReviewCallback(action="reply", review_id=review_id).pack()),
-        InlineKeyboardButton(text="❌ Удалить", callback_data=AdminReviewCallback(action="delete", review_id=review_id).pack())
+        InlineKeyboardButton(text="💬 Ответить",
+                             callback_data=AdminReviewCallback(action="reply", review_id=review_id).pack()),
+        InlineKeyboardButton(text="❌ Удалить",
+                             callback_data=AdminReviewCallback(action="delete", review_id=review_id).pack())
     )
     builder.row(
         InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data=AdminMenuCallback(action="main").pack())
     )
     return builder.as_markup()
+
 
 def get_admin_stats_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -309,6 +346,7 @@ def get_admin_stats_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data=AdminMenuCallback(action="main").pack())
     )
     return builder.as_markup()
+
 
 def get_admin_mailing_confirm_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -318,7 +356,7 @@ def get_admin_mailing_confirm_kb() -> InlineKeyboardMarkup:
     )
     return builder.as_markup()
 
-# --- НОВАЯ КЛАВИАТУРА ДЛЯ ПАГИНАЦИИ ПЛАТЕЖЕЙ ---
+
 def get_admin_payment_keyboard(work_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
@@ -329,6 +367,42 @@ def get_admin_payment_keyboard(work_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data=AdminMenuCallback(action="main").pack())
     )
     return builder.as_markup()
+
+
+# --- НОВАЯ КЛАВИАТУРА ДЛЯ ПРОСМОТРА КОММЕНТАРИЕВ ---
+def get_comments_keyboard(work_id: int, total_pages: int, current_page: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+
+    nav_buttons = []
+    if current_page > 1:
+        nav_buttons.append(
+            InlineKeyboardButton(text="⬅️", callback_data=CommentPaginationCallback(
+                action="prev", page=current_page - 1, work_id=work_id).pack())
+        )
+
+    if total_pages > 0:
+        nav_buttons.append(
+            InlineKeyboardButton(text=f"{current_page}/{total_pages}", callback_data="do_nothing")
+        )
+
+    if current_page < total_pages:
+        nav_buttons.append(
+            InlineKeyboardButton(text="➡️", callback_data=CommentPaginationCallback(
+                action="next", page=current_page + 1, work_id=work_id).pack())
+        )
+
+    if nav_buttons:
+        builder.row(*nav_buttons)
+
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Назад к работе", callback_data=WorkPaginationCallback(
+            action="return_to_work", current_work_id=work_id).pack())
+    )
+    return builder.as_markup()
+
+
+# ---------------------------------------------
+
 
 def get_rating_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()

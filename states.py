@@ -12,7 +12,7 @@ class MasterRegistration(StatesGroup):
 class WorkSubmission(StatesGroup):
     waiting_for_photo = State()
     waiting_for_description = State()
-    waiting_for_style = State()  # Теперь это выбор категории
+    waiting_for_style = State()
     waiting_for_price = State()
     waiting_for_payment_check = State()
 
@@ -37,7 +37,6 @@ class AdminCategoryManagement(StatesGroup):
     waiting_for_name = State()
 
 
-# --- НОВЫЕ СОСТОЯНИЯ ДЛЯ УПРАВЛЕНИЯ ОТЗЫВАМИ ---
 class AdminReviewManagement(StatesGroup):
     waiting_for_reply = State()
 
@@ -45,6 +44,10 @@ class AdminReviewManagement(StatesGroup):
 class UserReviewing(StatesGroup):
     waiting_for_rating = State()
     waiting_for_text = State()
+
+# --- НОВАЯ ГРУППА СОСТОЯНИЙ ДЛЯ КОММЕНТАРИЕВ ---
+class UserCommenting(StatesGroup):
+    waiting_for_comment_text = State()
 
 
 class UserMasterSearch(StatesGroup):

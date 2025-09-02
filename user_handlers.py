@@ -1,8 +1,11 @@
+# user_handlers.py
+
 from aiogram import Router, F, types
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, ReplyKeyboardRemove, CallbackQuery, InputMediaPhoto
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sqlalchemy import select, desc, asc, func, or_
 import logging
 from typing import Optional
@@ -12,9 +15,10 @@ from keyboards import (get_main_menu_kb, get_pagination_kb, WorkPaginationCallba
                        MasterCallback, LikeCallback, ReviewCallback, get_rating_kb,
                        get_work_filter_options_kb, get_category_filter_kb, WorkFilterCallback,
                        get_master_search_options_kb, get_master_list_pagination_kb,
-                       MasterSearchCallback, MasterListPagination)
-from database import User, MasterProfile, TattooWork, Like, Review, Category
-from states import MasterRegistration, UserReviewing, UserMasterSearch
+                       MasterSearchCallback, MasterListPagination, CommentCallback,
+                       get_comments_keyboard, CommentPaginationCallback)
+from database import User, MasterProfile, TattooWork, Like, Review, Category, Comment
+from states import MasterRegistration, UserReviewing, UserMasterSearch, UserCommenting
 
 router = Router()
 
@@ -106,7 +110,7 @@ async def process_socials(message: Message, state: FSMContext, session: AsyncSes
 # --- ПРОСМОТР РАБОТ И ФИЛЬТРАЦИЯ ---
 
 async def show_work(message_or_query, session: AsyncSession, work_id: int = None, direction: str = 'first',
-                    category_id: Optional[int] = None):
+                    category_id: Optional[int] = None, is_return: bool = False):
     if isinstance(message_or_query, CallbackQuery):
         query = message_or_query
         message = query.message
@@ -121,7 +125,9 @@ async def show_work(message_or_query, session: AsyncSession, work_id: int = None
         base_stmt = base_stmt.where(TattooWork.category_id == category_id)
 
     stmt = None
-    if direction == 'first':
+    if is_return:
+        stmt = select(TattooWork).where(TattooWork.id == work_id)
+    elif direction == 'first':
         stmt = base_stmt.order_by(asc(TattooWork.id)).limit(1)
     elif direction == 'next':
         stmt = base_stmt.where(TattooWork.id > work_id).order_by(asc(TattooWork.id)).limit(1)
@@ -159,6 +165,8 @@ async def show_work(message_or_query, session: AsyncSession, work_id: int = None
         like = await session.scalar(select(Like).where(Like.user_id == current_user_db.id, Like.work_id == work.id))
         is_liked = bool(like)
 
+    comments_count = await session.scalar(select(func.count(Comment.id)).where(Comment.work_id == work.id))
+
     username = user_master.username if user_master.username else "скрыт"
     category_name = work.category.name if work.category else "Не указан"
 
@@ -174,6 +182,7 @@ async def show_work(message_or_query, session: AsyncSession, work_id: int = None
         master_id=master_profile.id,
         likes_count=work.likes_count,
         is_liked=is_liked,
+        comments_count=comments_count,
         category_id=category_id
     )
 
@@ -222,13 +231,23 @@ async def filter_back_to_options(query: CallbackQuery):
 
 @router.callback_query(WorkPaginationCallback.filter())
 async def browse_works_paginated(query: CallbackQuery, callback_data: WorkPaginationCallback, session: AsyncSession):
-    await show_work(
-        query,
-        session,
-        work_id=callback_data.current_work_id,
-        direction=callback_data.action,
-        category_id=callback_data.category_id
-    )
+    is_return = callback_data.action == "return_to_work"
+
+    if is_return:
+        await show_work(
+            query,
+            session,
+            work_id=callback_data.current_work_id,
+            is_return=True
+        )
+    else:
+        await show_work(
+            query,
+            session,
+            work_id=callback_data.current_work_id,
+            direction=callback_data.action,
+            category_id=callback_data.category_id
+        )
 
 
 # --- ПРОСМОТР И ПОИСК МАСТЕРОВ ---
@@ -252,15 +271,13 @@ async def build_master_card_text(master_profile: MasterProfile, user_master: Use
 
 async def show_masters_list(message: types.Message, session: AsyncSession, page: int = 1, city: Optional[str] = None):
     """Отображает список мастеров с пагинацией."""
-    per_page = 1  # Показываем по одному мастеру
+    per_page = 1
     offset = (page - 1) * per_page
 
     base_query = select(MasterProfile).join(User).where(MasterProfile.is_active == True)
     if city:
-        # Поиск по городу без учета регистра
         base_query = base_query.where(func.lower(MasterProfile.city) == city.lower())
 
-    # Считаем общее количество
     count_query = select(func.count()).select_from(base_query.subquery())
     total_masters = await session.scalar(count_query)
 
@@ -268,7 +285,6 @@ async def show_masters_list(message: types.Message, session: AsyncSession, page:
         text = "Мастера не найдены."
         if city:
             text = f"Мастера из города '{city}' не найдены."
-        # Проверяем, было ли это сообщение отправлено после ввода текста (не имеет reply_markup)
         if hasattr(message, 'edit_text'):
             await message.edit_text(text, reply_markup=None)
         else:
@@ -277,7 +293,6 @@ async def show_masters_list(message: types.Message, session: AsyncSession, page:
 
     total_pages = ceil(total_masters / per_page)
 
-    # Получаем мастера на текущей странице
     masters_query = base_query.order_by(desc(MasterProfile.rating)).limit(per_page).offset(offset)
     master_profile = await session.scalar(masters_query)
 
@@ -289,7 +304,6 @@ async def show_masters_list(message: types.Message, session: AsyncSession, page:
     if hasattr(message, 'edit_text'):
         await message.edit_text(card_text, reply_markup=keyboard, disable_web_page_preview=True)
     else:
-        # Это случай, когда пользователь ввел город текстом
         await message.answer(card_text, reply_markup=keyboard, disable_web_page_preview=True)
 
 
@@ -365,11 +379,14 @@ async def toggle_like(query: CallbackQuery, callback_data: LikeCallback, session
 
     await session.commit()
 
+    comments_count = await session.scalar(select(func.count(Comment.id)).where(Comment.work_id == work.id))
+
     keyboard = get_pagination_kb(
         current_work_id=work.id,
         master_id=work.master_id,
         likes_count=work.likes_count,
         is_liked=is_liked_new,
+        comments_count=comments_count,
         category_id=current_category_id
     )
     await query.message.edit_reply_markup(reply_markup=keyboard)
@@ -422,6 +439,87 @@ async def process_review_text(message: Message, state: FSMContext, session: Asyn
     await message.answer("✅ Спасибо! Ваш отзыв был успешно оставлен.")
 
 
+# --- КОММЕНТАРИИ ---
+
+COMMENTS_PER_PAGE = 5
+
+
+@router.callback_query(CommentCallback.filter(F.action == "create"))
+async def start_commenting(query: CallbackQuery, callback_data: CommentCallback, state: FSMContext):
+    await state.set_state(UserCommenting.waiting_for_comment_text)
+    await state.update_data(work_id=callback_data.work_id)
+    await query.message.answer("Введите ваш комментарий:")
+    await query.answer()
+
+
+@router.message(UserCommenting.waiting_for_comment_text, F.text)
+async def process_comment_text(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    work_id = data.get("work_id")
+
+    user = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
+
+    new_comment = Comment(
+        work_id=work_id,
+        user_id=user.id,
+        text=message.text
+    )
+    session.add(new_comment)
+    await session.commit()
+    await state.clear()
+
+    await message.answer("✅ Ваш комментарий добавлен.")
+
+    await show_work(message, session, work_id=work_id, is_return=True)
+
+
+async def show_comments(query: CallbackQuery, session: AsyncSession, work_id: int, page: int = 1):
+    total_comments_count = await session.scalar(select(func.count(Comment.id)).where(Comment.work_id == work_id))
+    total_pages = ceil(total_comments_count / COMMENTS_PER_PAGE)
+
+    if total_pages == 0 and page == 1:
+        await query.message.edit_text(
+            "Комментариев пока нет.",
+            reply_markup=get_comments_keyboard(work_id, total_pages, page)
+        )
+        await query.answer()
+        return
+
+    offset = (page - 1) * COMMENTS_PER_PAGE
+    comments_result = await session.execute(
+        select(Comment)
+        .where(Comment.work_id == work_id)
+        .options(selectinload(Comment.user))
+        .order_by(desc(Comment.created_at))
+        .limit(COMMENTS_PER_PAGE)
+        .offset(offset)
+    )
+    comments = comments_result.scalars().all()
+
+    text = f"<b>Комментарии к работе #{work_id} (Страница {page}/{total_pages})</b>\n\n"
+
+    for comment in comments:
+        username = comment.user.username or f"user{comment.user.telegram_id}"
+        text += f"👤 <b>@{username}</b>: <i>{comment.text}</i>\n\n"
+
+    await query.message.edit_text(
+        text,
+        reply_markup=get_comments_keyboard(work_id, total_pages, page),
+        disable_web_page_preview=True
+    )
+    await query.answer()
+
+
+@router.callback_query(CommentCallback.filter(F.action == "view"))
+async def view_comments(query: CallbackQuery, callback_data: CommentCallback, session: AsyncSession):
+    await show_comments(query, session, work_id=callback_data.work_id, page=1)
+
+
+@router.callback_query(CommentPaginationCallback.filter())
+async def paginate_comments(query: CallbackQuery, callback_data: CommentPaginationCallback, session: AsyncSession):
+    await show_comments(query, session, work_id=callback_data.work_id, page=callback_data.page)
+
+
 # --- ПРОФИЛЬ МАСТЕРА (ОБЩИЙ ПРОСМОТР) ---
 
 @router.callback_query(MasterCallback.filter(F.action == "view"))
@@ -443,4 +541,3 @@ async def show_master_profile(query: CallbackQuery, callback_data: MasterCallbac
 @router.message(F.text.in_({"❓ FAQ", "📞 Контакты"}))
 async def menu_in_development(message: Message):
     await message.answer("Этот раздел находится в разработке...")
-
