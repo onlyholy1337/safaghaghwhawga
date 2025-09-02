@@ -1,3 +1,5 @@
+# keyboards.py
+
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters.callback_data import CallbackData
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
@@ -36,6 +38,11 @@ class AdminCategoryCallback(CallbackData, prefix="admin_cat"):
     action: str
     category_id: Optional[int] = None
     category_name: Optional[str] = None
+
+# --- НОВЫЙ CALLBACK ДЛЯ УПРАВЛЕНИЯ ОТЗЫВАМИ ---
+class AdminReviewCallback(CallbackData, prefix="admin_review"):
+    action: str  # 'prev', 'next', 'delete', 'reply'
+    review_id: int
 
 
 class WorkPaginationCallback(CallbackData, prefix="work_pag"):
@@ -265,6 +272,22 @@ def get_admin_category_manage_kb(categories: List[Category]) -> InlineKeyboardMa
     builder.row(
         InlineKeyboardButton(text="➕ Добавить новую категорию",
                              callback_data=AdminCategoryCallback(action="add").pack())
+    )
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data=AdminMenuCallback(action="main").pack())
+    )
+    return builder.as_markup()
+
+# --- НОВАЯ КЛАВИАТУРА ДЛЯ УПРАВЛЕНИЯ ОТЗЫВАМИ ---
+def get_admin_review_keyboard(review_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="⬅️", callback_data=AdminReviewCallback(action="prev", review_id=review_id).pack()),
+        InlineKeyboardButton(text="➡️", callback_data=AdminReviewCallback(action="next", review_id=review_id).pack())
+    )
+    builder.row(
+        InlineKeyboardButton(text="💬 Ответить", callback_data=AdminReviewCallback(action="reply", review_id=review_id).pack()),
+        InlineKeyboardButton(text="❌ Удалить", callback_data=AdminReviewCallback(action="delete", review_id=review_id).pack())
     )
     builder.row(
         InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data=AdminMenuCallback(action="main").pack())

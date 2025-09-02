@@ -1,3 +1,5 @@
+# states.py
+
 from aiogram.fsm.state import State, StatesGroup
 
 
@@ -31,9 +33,13 @@ class MasterProfileEdit(StatesGroup):
     waiting_for_new_socials = State()
 
 
-# Исправлено имя класса на AdminCategoryManagement
 class AdminCategoryManagement(StatesGroup):
     waiting_for_name = State()
+
+
+# --- НОВЫЕ СОСТОЯНИЯ ДЛЯ УПРАВЛЕНИЯ ОТЗЫВАМИ ---
+class AdminReviewManagement(StatesGroup):
+    waiting_for_reply = State()
 
 
 class UserReviewing(StatesGroup):
@@ -41,6 +47,5 @@ class UserReviewing(StatesGroup):
     waiting_for_text = State()
 
 
-# --- НОВОЕ СОСТОЯНИЕ ДЛЯ ЭТОГО ШАГА ---
 class UserMasterSearch(StatesGroup):
     waiting_for_city = State()
