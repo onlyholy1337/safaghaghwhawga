@@ -7,6 +7,7 @@ from sqlalchemy import select, delete
 from keyboards import (get_admin_category_manage_kb, AdminMenuCallback,
                        AdminCategoryCallback, get_admin_main_kb)
 from database import Category
+# Исправлено имя импортируемого класса
 from states import AdminCategoryManagement
 from admin_handlers import IsAdmin
 
@@ -39,7 +40,7 @@ async def manage_categories(query: CallbackQuery, session: AsyncSession):
     categories = await session.scalars(select(Category).order_by(Category.name))
     await query.message.edit_text(
         "Управление категориями (стилями) татуировок:",
-        reply_markup=get_admin_category_manage_kb(categories.all())
+        reply_markup=get_admin_category_manage_kb(list(categories.all()))
     )
 
 
@@ -71,7 +72,7 @@ async def add_category_process(message: Message, state: FSMContext, session: Asy
     categories = await session.scalars(select(Category).order_by(Category.name))
     await message.answer(
         "Управление категориями (стилями) татуировок:",
-        reply_markup=get_admin_category_manage_kb(categories.all())
+        reply_markup=get_admin_category_manage_kb(list(categories.all()))
     )
 
 
@@ -90,5 +91,5 @@ async def delete_category(query: CallbackQuery, callback_data: AdminCategoryCall
     categories = await session.scalars(select(Category).order_by(Category.name))
     await query.message.edit_text(
         "Управление категориями (стилями) татуировок:",
-        reply_markup=get_admin_category_manage_kb(categories.all())
+        reply_markup=get_admin_category_manage_kb(list(categories.all()))
     )

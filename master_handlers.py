@@ -86,7 +86,7 @@ async def process_price(message: Message, state: FSMContext, session: AsyncSessi
     await state.update_data(price=int(message.text))
     user_data = await state.get_data()
 
-    placement_price = 1
+    placement_price = 1  # Цена за размещение
     invoice = await crypto_api.create_invoice(asset="USDT", amount=placement_price)
 
     if invoice:
@@ -110,6 +110,7 @@ async def process_price(message: Message, state: FSMContext, session: AsyncSessi
         )
         session.add(new_work)
         await session.commit()
+        await session.refresh(new_work) # Обновляем объект, чтобы получить его id
 
         await message.answer(
             f"Ваша работа почти добавлена! Осталось оплатить размещение.\n\nСумма: {placement_price} USDT",
@@ -295,7 +296,8 @@ async def show_my_profile(message: Message, session: AsyncSession):
 @router.callback_query(F.data == "edit_master_profile")
 async def start_edit_profile(query: CallbackQuery, state: FSMContext):
     await state.set_state(MasterProfileEdit.waiting_for_choice)
-    await query.message.answer("Что именно вы хотите изменить? (Пока что можно изменить только город)")
+    # Пока что можно изменить только город
+    await query.message.answer("Введите новый город:")
     await state.set_state(MasterProfileEdit.waiting_for_new_city)
     await query.answer()
 

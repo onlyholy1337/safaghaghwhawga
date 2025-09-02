@@ -32,7 +32,8 @@ class MasterProfile(Base):
     city: Mapped[str] = mapped_column(String(100), nullable=True)
     social_links: Mapped[List[dict]] = mapped_column(SA_JSON, nullable=True)
     is_active: Mapped[bool] = mapped_column(default=True)
-    rating: Mapped[float] = mapped_column(DECIMAL(3, 2), nullable=True)
+    # Добавлено отсутствующее поле rating
+    rating: Mapped[float] = mapped_column(DECIMAL(3, 2), nullable=True, default=0.0)
 
 class Category(Base):
     __tablename__ = 'categories'

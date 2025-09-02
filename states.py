@@ -31,7 +31,8 @@ class MasterProfileEdit(StatesGroup):
     waiting_for_new_socials = State()
 
 
-class AdminCategory(StatesGroup):
+# Исправлено имя класса на AdminCategoryManagement
+class AdminCategoryManagement(StatesGroup):
     waiting_for_name = State()
 
 
