@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  # Наш бот (пока заглушка, добавим позже)
+  # bot:
+  #   build: .
+  #   env_file: .env
+  #   depends_on:
+  #     - redis
+
+  # Сервис Redis
+  redis:
+    image: redis:7-alpine  # Используем легковесный образ
+    container_name: tattoo_redis
+    restart: always
+    ports:
+      - "6379:6379"  # Пробрасываем порт на твой компьютер
+    volumes:
+      - redis_data:/data # Сохраняем данные между перезапусками
+
+volumes:
+  redis_data:
