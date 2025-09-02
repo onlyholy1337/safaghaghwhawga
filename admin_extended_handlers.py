@@ -4,16 +4,15 @@ from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, desc, asc
+from sqlalchemy import select, delete, desc, asc, func
 
 from keyboards import (get_admin_category_manage_kb, AdminMenuCallback,
                        AdminCategoryCallback, get_admin_main_kb, AdminReviewCallback,
-                       get_admin_review_keyboard)
-from database import Category, Review, User, MasterProfile
+                       get_admin_review_keyboard, get_admin_stats_kb)
+from database import Category, Review, User, MasterProfile, TattooWork
 from states import AdminCategoryManagement, AdminReviewManagement
 from admin_handlers import IsAdmin
 import logging
-
 
 router = Router()
 router.message.filter(IsAdmin())
@@ -31,7 +30,7 @@ async def back_to_main_admin_menu(query: CallbackQuery):
 
 
 @router.callback_query(AdminMenuCallback.filter(F.action.in_([
-    "work_management", "payment_management", "statistics", "mailing"
+    "work_management", "payment_management", "mailing"
 ])))
 async def section_in_development(query: CallbackQuery):
     await query.answer("Этот раздел находится в разработке.", show_alert=True)
@@ -95,7 +94,7 @@ async def delete_category(query: CallbackQuery, callback_data: AdminCategoryCall
     )
 
 
-# --- НОВЫЙ БЛОК: УПРАВЛЕНИЕ ОТЗЫВАМИ ---
+# --- УПРАВЛЕНИЕ ОТЗЫВАМИ ---
 
 async def get_review_info_text(review: Review, session: AsyncSession) -> str:
     """Формирует красивый текст для отображения отзыва."""
@@ -107,8 +106,8 @@ async def get_review_info_text(review: Review, session: AsyncSession) -> str:
 
     return (
         f"<b>Отзыв #{review.id}</b>\n\n"
-        f"<b>Клиент:</b> @{client.username} (ID: `{client.telegram_id}`)\n"
-        f"<b>Мастер:</b> @{master_user.username} (ID: `{master_user.telegram_id}`)\n"
+        f"<b>Клиент:</b> @{client.username} (ID: <code>{client.telegram_id}</code>)\n"
+        f"<b>Мастер:</b> @{master_user.username} (ID: <code>{master_user.telegram_id}</code>)\n"
         f"<b>Работа ID:</b> {review.work_id}\n"
         f"<b>Оценка:</b> {rating_stars}\n\n"
         f"<b>Текст:</b>\n<i>{review.text}</i>\n\n"
@@ -116,7 +115,8 @@ async def get_review_info_text(review: Review, session: AsyncSession) -> str:
     )
 
 
-async def show_review_for_admin(query: CallbackQuery, session: AsyncSession, review_id: int = None, direction: str = 'first'):
+async def show_review_for_admin(query: CallbackQuery, session: AsyncSession, review_id: int = None,
+                                direction: str = 'first'):
     """Отображает отзыв админу с пагинацией."""
     stmt = None
     if direction == 'first':
@@ -186,7 +186,6 @@ async def process_review_reply(message: Message, state: FSMContext, session: Asy
 
     await message.answer("✅ Ваш ответ сохранен и отправлен мастеру.")
 
-    # Уведомление мастеру
     try:
         master_profile = await session.get(MasterProfile, review.master_id)
         master_user = await session.get(User, master_profile.user_id)
@@ -196,3 +195,38 @@ async def process_review_reply(message: Message, state: FSMContext, session: Asy
         )
     except Exception as e:
         logging.error(f"Не удалось отправить уведомление мастеру {master_user.telegram_id}: {e}")
+
+
+# --- СТАТИСТИКА ---
+
+@router.callback_query(AdminMenuCallback.filter(F.action == "statistics"))
+async def show_statistics(query: CallbackQuery, session: AsyncSession):
+    total_users = await session.scalar(select(func.count(User.id)))
+    total_masters = await session.scalar(select(func.count(User.id)).where(User.role == 'master'))
+    total_clients = await session.scalar(select(func.count(User.id)).where(User.role == 'client'))
+
+    total_works = await session.scalar(select(func.count(TattooWork.id)))
+    published_works = await session.scalar(select(func.count(TattooWork.id)).where(TattooWork.status == 'published'))
+    pending_works = await session.scalar(
+        select(func.count(TattooWork.id)).where(TattooWork.status == 'pending_approval'))
+    rejected_works = await session.scalar(select(func.count(TattooWork.id)).where(TattooWork.status == 'rejected'))
+
+    total_reviews = await session.scalar(select(func.count(Review.id)))
+
+    stats_text = (
+        "📊 <b>Статистика Маркетплейса</b>\n\n"
+        "👥 <b>Пользователи:</b>\n"
+        f"  - Всего: <b>{total_users}</b>\n"
+        f"  - Мастеров: <b>{total_masters}</b>\n"
+        f"  - Клиентов: <b>{total_clients}</b>\n\n"
+        "🎨 <b>Работы:</b>\n"
+        f"  - Всего загружено: <b>{total_works}</b>\n"
+        f"  - Опубликовано: <b>{published_works}</b>\n"
+        f"  - На модерации: <b>{pending_works}</b>\n"
+        f"  - Отклонено: <b>{rejected_works}</b>\n\n"
+        "⭐️ <b>Отзывы:</b>\n"
+        f"  - Всего оставлено: <b>{total_reviews}</b>"
+    )
+
+    await query.message.edit_text(stats_text, reply_markup=get_admin_stats_kb())
+    await query.answer()

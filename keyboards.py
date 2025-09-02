@@ -39,7 +39,7 @@ class AdminCategoryCallback(CallbackData, prefix="admin_cat"):
     category_id: Optional[int] = None
     category_name: Optional[str] = None
 
-# --- НОВЫЙ CALLBACK ДЛЯ УПРАВЛЕНИЯ ОТЗЫВАМИ ---
+
 class AdminReviewCallback(CallbackData, prefix="admin_review"):
     action: str  # 'prev', 'next', 'delete', 'reply'
     review_id: int
@@ -278,7 +278,6 @@ def get_admin_category_manage_kb(categories: List[Category]) -> InlineKeyboardMa
     )
     return builder.as_markup()
 
-# --- НОВАЯ КЛАВИАТУРА ДЛЯ УПРАВЛЕНИЯ ОТЗЫВАМИ ---
 def get_admin_review_keyboard(review_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
@@ -294,6 +293,12 @@ def get_admin_review_keyboard(review_id: int) -> InlineKeyboardMarkup:
     )
     return builder.as_markup()
 
+def get_admin_stats_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data=AdminMenuCallback(action="main").pack())
+    )
+    return builder.as_markup()
 
 def get_rating_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
