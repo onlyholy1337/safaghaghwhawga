@@ -17,10 +17,14 @@ from keyboards import (get_main_menu_kb, get_pagination_kb, WorkPaginationCallba
                        get_master_search_options_kb, get_master_list_pagination_kb,
                        MasterSearchCallback, MasterListPagination, CommentCallback,
                        get_comments_keyboard, CommentPaginationCallback)
-from database import User, MasterProfile, TattooWork, Like, Review, Category, Comment
+from database import (User, MasterProfile, TattooWork, Like, Review, Category,
+                      Comment, get_setting, BotSettings)
 from states import MasterRegistration, UserReviewing, UserMasterSearch, UserCommenting
+from crypto_api import CryptoAPI
+from config import settings
 
 router = Router()
+crypto_api = CryptoAPI(token=settings.crypto_api_token.get_secret_value())
 
 
 async def update_master_rating(master_id: int, session: AsyncSession):
@@ -58,10 +62,56 @@ async def cmd_start(message: Message, session: AsyncSession):
 # --- РЕГИСТРАЦИЯ МАСТЕРА ---
 
 @router.message(F.text == "⭐️ Стать мастером")
-async def start_master_reg(message: Message, state: FSMContext):
-    await state.set_state(MasterRegistration.waiting_for_city)
-    await message.answer("Из какого вы города?", reply_markup=ReplyKeyboardRemove())
+async def start_master_reg(message: Message, state: FSMContext, session: AsyncSession):
+    user = await session.scalar(select(User).where(User.telegram_id = message.from_user.id))
+    if user and user.role == 'master':
+        await message.answer("Вы уже являетесь мастером.")
+        return
 
+    price_str = await get_setting(session, 'master_price', '0')
+    price = int(price_str)
+
+    if price > 0:
+        invoice = await crypto_api.create_invoice(asset="USDT", amount=price)
+        if invoice:
+            await message.answer(
+                f"Стоимость получения статуса мастера: {price} USDT.\n\n"
+                "Пожалуйста, оплатите счет для продолжения регистрации.",
+                reply_markup=get_payment_kb(pay_url=invoice['pay_url'], work_id=0, invoice_id=invoice['invoice_id'])
+            )
+            # Сохраняем invoice_id в FSM для проверки
+            await state.set_data({'master_reg_invoice_id': invoice['invoice_id']})
+        else:
+            await message.answer("Не удалось создать счет для оплаты. Попробуйте позже.")
+    else:  # Бесплатная регистрация
+        await state.set_state(MasterRegistration.waiting_for_city)
+        await message.answer("Из какого вы города?", reply_markup=ReplyKeyboardRemove())
+
+
+# 👇 ДОБАВЬТЕ ЭТУ НОВУЮ ФУНКЦИЮ
+@router.callback_query(PaymentCallback.filter(F.work_id == 0))  # Используем work_id=0 как флаг для регистрации
+async def check_master_payment(query: CallbackQuery, callback_data: PaymentCallback, state: FSMContext,
+                               session: AsyncSession):
+    await query.answer("Проверяем оплату...")
+
+    state_data = await state.get_data()
+    expected_invoice_id = state_data.get('master_reg_invoice_id')
+
+    if not expected_invoice_id or expected_invoice_id != callback_data.invoice_id:
+        await query.message.edit_text("Произошла ошибка с проверкой счета. Попробуйте снова.")
+        return
+
+    invoices_data = await crypto_api.get_invoices(invoice_ids=[callback_data.invoice_id])
+    if invoices_data and invoices_data.get('items'):
+        invoice = invoices_data['items'][0]
+        if invoice['status'] == 'paid':
+            await query.message.edit_text("✅ Оплата прошла успешно! Начинаем регистрацию.")
+            await state.set_state(MasterRegistration.waiting_for_city)
+            await query.message.answer("Из какого вы города?", reply_markup=ReplyKeyboardRemove())
+        else:
+            await query.answer("Оплата еще не поступила.", show_alert=True)
+    else:
+        await query.answer("Не удалось проверить статус оплаты.", show_alert=True)
 
 @router.message(MasterRegistration.waiting_for_city, F.text)
 async def process_city(message: Message, state: FSMContext):
@@ -120,13 +170,20 @@ async def show_work(message_or_query, session: AsyncSession, work_id: int = None
         message = message_or_query
         user_id = message.from_user.id
 
-    base_stmt = select(TattooWork).options(selectinload(TattooWork.category)).where(TattooWork.status == 'published')
+    base_stmt = select(TattooWork).options(
+        selectinload(TattooWork.category),
+        selectinload(TattooWork.master).selectinload(MasterProfile.user)
+    ).where(TattooWork.status == 'published')
+
     if category_id:
         base_stmt = base_stmt.where(TattooWork.category_id == category_id)
 
     stmt = None
     if is_return:
-        stmt = select(TattooWork).where(TattooWork.id == work_id)
+        stmt = select(TattooWork).options(
+            selectinload(TattooWork.category),
+            selectinload(TattooWork.master).selectinload(MasterProfile.user)
+        ).where(TattooWork.id == work_id)
     elif direction == 'first':
         stmt = base_stmt.order_by(asc(TattooWork.id)).limit(1)
     elif direction == 'next':

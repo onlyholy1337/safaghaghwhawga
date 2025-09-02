@@ -1,21 +1,22 @@
 # admin_extended_handlers.py
 
-from aiogram import Router, F, types
-from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, desc, asc, func
 import asyncio
 import logging
 
+from aiogram import Router, F
+from aiogram.fsm.context import FSMContext
+from aiogram.types import Message, CallbackQuery
+from sqlalchemy import select, delete, desc, asc, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from admin_handlers import IsAdmin
+from database import Category, Review, User, MasterProfile, TattooWork, BotSettings, get_setting
 from keyboards import (get_admin_category_manage_kb, AdminMenuCallback,
                        AdminCategoryCallback, get_admin_main_kb, AdminReviewCallback,
                        get_admin_review_keyboard, get_admin_stats_kb,
                        AdminMailingCallback, get_admin_mailing_confirm_kb,
                        AdminPaymentCallback, get_admin_payment_keyboard)  # Добавили импорты
-from database import Category, Review, User, MasterProfile, TattooWork
-from states import AdminCategoryManagement, AdminReviewManagement, AdminMailing
-from admin_handlers import IsAdmin
+from states import AdminCategoryManagement, AdminReviewManagement, AdminMailing, AdminSettingsManagement
 
 router = Router()
 router.message.filter(IsAdmin())
@@ -169,23 +170,30 @@ async def process_review_reply(message: Message, state: FSMContext, session: Asy
     review_id = data.get("review_id")
     reply_text = message.text
     review = await session.get(Review, review_id)
+
     if not review:
         await message.answer("Ошибка: не удалось найти отзыв для ответа.")
         await state.clear()
         return
+
     review.admin_reply = reply_text
     await session.commit()
     await state.clear()
     await message.answer("✅ Ваш ответ сохранен и отправлен мастеру.")
+
+    master_user = None  # Initialize master_user to None
     try:
         master_profile = await session.get(MasterProfile, review.master_id)
-        master_user = await session.get(User, master_profile.user_id)
-        await message.bot.send_message(
-            master_user.telegram_id,
-            f"Администратор ответил на отзыв #{review.id}:\n\n<i>{reply_text}</i>"
-        )
+        if master_profile:
+            master_user = await session.get(User, master_profile.user_id)
+            if master_user:
+                await message.bot.send_message(
+                    master_user.telegram_id,
+                    f"Администратор ответил на отзыв #{review.id}:\n\n<i>{reply_text}</i>"
+                )
     except Exception as e:
-        logging.error(f"Не удалось отправить уведомление мастеру {master_user.telegram_id}: {e}")
+        user_id_for_log = master_user.telegram_id if master_user else "unknown"
+        logging.error(f"Не удалось отправить уведомление мастеру {user_id_for_log}: {e}")
 
 
 # --- СТАТИСТИКА ---
@@ -329,3 +337,49 @@ async def start_payment_management(query: CallbackQuery, session: AsyncSession):
 @router.callback_query(AdminPaymentCallback.filter(F.action.in_(['prev', 'next'])))
 async def paginate_payments(query: CallbackQuery, callback_data: AdminPaymentCallback, session: AsyncSession):
     await show_payment_for_admin(query, session, work_id=callback_data.work_id, direction=callback_data.action)
+
+
+# --- НОВЫЙ БЛОК: УПРАВЛЕНИЕ НАСТРОЙКАМИ ---
+
+@router.callback_query(AdminMenuCallback.filter(F.action == "settings"))
+async def show_settings(query: CallbackQuery, session: AsyncSession):
+    master_price = await get_setting(session, 'master_price', '0')
+    await query.message.edit_text(
+        "⚙️ Настройки бота",
+        reply_markup=get_admin_settings_kb(master_price)
+    )
+
+
+@router.callback_query(F.data == "set_master_price")
+async def start_set_master_price(query: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminSettingsManagement.waiting_for_master_price)
+    await query.message.edit_text(
+        "Введите новую цену в USDT за получение статуса мастера (например: 10). Введите 0, чтобы сделать регистрацию бесплатной.")
+    await query.answer()
+
+
+@router.message(AdminSettingsManagement.waiting_for_master_price, F.text)
+async def process_new_master_price(message: Message, state: FSMContext, session: AsyncSession):
+    if not message.text.isdigit():
+        await message.answer("Пожалуйста, введите целое число.")
+        return
+
+    new_price = message.text
+
+    setting = await session.get(BotSettings, 'master_price')
+    if setting:
+        setting.value = new_price
+    else:
+        session.add(BotSettings(key='master_price', value=new_price))
+
+    await session.commit()
+    await state.clear()
+
+    await message.answer(f"✅ Цена за статус мастера установлена: {new_price} USDT.")
+
+    # Возвращаемся в меню настроек
+    master_price = await get_setting(session, 'master_price', '0')
+    await message.answer(
+        "⚙️ Настройки бота",
+        reply_markup=get_admin_settings_kb(master_price)
+    )

@@ -71,13 +71,13 @@ async def process_user_search(message: Message, state: FSMContext, session: Asyn
         if master_profile:
             is_active = master_profile.is_active
             user_info += f"\nСтатус: {'Активен' if is_active else 'Заблокирован'}"
-            keyboard = get_admin_user_manage_kb(user_id=user.id, is_active=is_active)
+            keyboard = get_admin_user_manage_kb(user_id=user.id, is_active=is_active, role=user.role)
 
     await message.answer(user_info, reply_markup=keyboard)
     await state.clear()
 
 
-@router.callback_query(AdminUserActionCallback.filter(F.action.in_(['block', 'unblock'])))
+@router.callback_query(AdminUserActionCallback.filter(F.action.in_(['block', 'unblock', 'revoke_master'])))
 async def block_unblock_user(query: CallbackQuery, callback_data: AdminUserActionCallback, session: AsyncSession):
     user_to_manage = await session.get(User, callback_data.user_id)
     if not user_to_manage or user_to_manage.role != 'master':
@@ -107,6 +107,32 @@ async def block_unblock_user(query: CallbackQuery, callback_data: AdminUserActio
                                      f"Ваш профиль мастера был {action_text} администратором.")
     except Exception as e:
         print(f"Не удалось уведомить пользователя {user_to_manage.telegram_id}: {e}")
+
+    if callback_data.action == 'revoke_master':
+        user_to_manage.role = 'client'
+        if master_profile:
+            # Удаляем работы мастера и его профиль
+            await session.execute(delete(TattooWork).where(TattooWork.master_id == master_profile.id))
+            await session.delete(master_profile)
+        action_text = "лишен статуса мастера"
+
+        await session.commit()
+        await query.answer("Пользователь лишен статуса мастера.", show_alert=True)
+        await query.message.edit_text("Профиль пользователя обновлен. Он больше не является мастером.")
+
+        try:
+            await query.bot.send_message(user_to_manage.telegram_id, "Администратор лишил вас статуса мастера.")
+        except Exception as e:
+            logging.error(f"Не удалось уведомить пользователя {user_to_manage.telegram_id}: {e}")
+        return
+
+    await session.commit()
+    await query.answer(f"Мастер успешно {action_text}.")
+    # 👇 ИЗМЕНЯЕМ ВЫЗОВ, ДОБАВЛЯЕМ user_to_manage.role
+    keyboard = get_admin_user_manage_kb(user_id=user_to_manage.id, is_active=master_profile.is_active,
+                                        role=user_to_manage.role)
+    await query.message.edit_reply_markup(reply_markup=keyboard)
+
 
 
 # --- БЛОК МОДЕРАЦИИ РАБОТ (без изменений) ---

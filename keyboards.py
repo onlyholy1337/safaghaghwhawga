@@ -14,6 +14,13 @@ class MasterProfileEditCallback(CallbackData, prefix="master_edit"):
     action: str  # 'city', 'description', 'socials'
 
 
+
+class MasterReviewCallback(CallbackData, prefix="master_review"):
+    action: str  # 'view', 'prev', 'next', 'reply'
+    review_id: int
+
+
+
 class MasterReviewsPagination(CallbackData, prefix="master_reviews_pag"):
     action: str  # 'view', 'prev', 'next'
     master_id: int
@@ -41,11 +48,11 @@ class MyWorksPaginationCallback(CallbackData, prefix="my_works_pag"):
 
 
 class AdminMenuCallback(CallbackData, prefix="admin_menu"):
-    action: str
+    action: str # 'user_management', 'work_management', 'review_management', 'payment_management', 'category_management', 'statistics', 'mailing', 'settings'
 
 
 class AdminCategoryCallback(CallbackData, prefix="admin_cat"):
-    action: str
+    action: str # 'block', 'unblock', 'revoke_master'
     category_id: Optional[int] = None
     category_name: Optional[str] = None
 
@@ -306,6 +313,9 @@ def get_admin_main_kb() -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(text="📤 Рассылка", callback_data=AdminMenuCallback(action="mailing").pack())
     )
+    builder.row(
+        InlineKeyboardButton(text="⚙️ Настройки бота", callback_data=AdminMenuCallback(action="settings").pack())
+    )
     return builder.as_markup()
 
 
@@ -440,28 +450,59 @@ def get_admin_moderation_kb(work_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_admin_user_manage_kb(user_id: int, is_active: bool) -> InlineKeyboardMarkup:
+def get_admin_settings_kb(master_price: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=f"💰 Цена за статус мастера ({master_price} USDT)",
+                             callback_data="set_master_price")
+    )
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data=AdminMenuCallback(action="main").pack())
+    )
+    return builder.as_markup()
+
+
+def get_admin_user_manage_kb(user_id: int, is_active: bool, role: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if is_active:
         builder.row(
-            InlineKeyboardButton(
-                text="🚫 Заблокировать",
-                callback_data=AdminUserActionCallback(action="block", user_id=user_id).pack()
-            )
+            InlineKeyboardButton(text="🚫 Заблокировать",
+                                 callback_data=AdminUserActionCallback(action="block", user_id=user_id).pack())
         )
     else:
         builder.row(
-            InlineKeyboardButton(
-                text="✅ Разблокировать",
-                callback_data=AdminUserActionCallback(action="unblock", user_id=user_id).pack()
-            )
+            InlineKeyboardButton(text="✅ Разблокировать",
+                                 callback_data=AdminUserActionCallback(action="unblock", user_id=user_id).pack())
+        )
+    # 👇 ДОБАВЛЯЕМ КНОПКУ ЛИШЕНИЯ СТАТУСА
+    if role == 'master':
+        builder.row(
+            InlineKeyboardButton(text="🎓 Лишить статуса мастера",
+                                 callback_data=AdminUserActionCallback(action="revoke_master", user_id=user_id).pack())
         )
     return builder.as_markup()
 
 
 def get_master_profile_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="⭐️ Мои отзывы", callback_data="master_reviews_view"))
     builder.row(InlineKeyboardButton(text="✏️ Редактировать профиль", callback_data="edit_master_profile"))
+    return builder.as_markup()
+
+
+def get_master_review_keyboard(review_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="⬅️", callback_data=MasterReviewCallback(action="prev", review_id=review_id).pack()),
+        InlineKeyboardButton(text="➡️", callback_data=MasterReviewCallback(action="next", review_id=review_id).pack())
+    )
+    builder.row(
+        InlineKeyboardButton(text="💬 Ответить",
+                             callback_data=MasterReviewCallback(action="reply", review_id=review_id).pack())
+    )
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Назад в профиль", callback_data="show_my_profile")
+    )
     return builder.as_markup()
 
 

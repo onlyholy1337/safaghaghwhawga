@@ -52,3 +52,11 @@ class UserCommenting(StatesGroup):
 
 class UserMasterSearch(StatesGroup):
     waiting_for_city = State()
+
+
+class MasterReviewReply(StatesGroup):
+    waiting_for_reply_text = State()
+
+
+class AdminSettingsManagement(StatesGroup):
+    waiting_for_master_price = State()

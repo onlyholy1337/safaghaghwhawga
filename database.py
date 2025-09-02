@@ -38,7 +38,7 @@ class MasterProfile(Base):
     is_active: Mapped[bool] = mapped_column(default=True)
     rating: Mapped[float] = mapped_column(DECIMAL(3, 2), nullable=True, default=0.0)
     user: Mapped["User"] = relationship(back_populates="master_profile")
-    works: Mapped[List["TattooWork"]] = relationship()
+    works: Mapped[List["TattooWork"]] = relationship(back_populates="master")
 
 
 class Category(Base):
@@ -100,6 +100,17 @@ class Comment(Base):
     user: Mapped["User"] = relationship()
 
 
+class BotSettings(Base):
+    __tablename__ = 'bot_settings'
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255))
+
+
 async def create_tables():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+async def get_setting(session: AsyncSession, key: str, default: Optional[str] = None) -> Optional[str]:
+    setting = await session.get(BotSettings, key)
+    return setting.value if setting else default

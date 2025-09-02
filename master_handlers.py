@@ -7,13 +7,15 @@ from sqlalchemy import select, asc, desc
 from sqlalchemy.orm import selectinload
 import logging
 
-from states import WorkSubmission, MasterProfileEdit
+from states import WorkSubmission, MasterProfileEdit, MasterReviewReply # Добавили MasterReviewReply
 from crypto_api import CryptoAPI
 from config import settings
 from keyboards import (get_payment_kb, get_main_menu_kb, PaymentCallback, get_admin_moderation_kb,
                        get_master_profile_kb, MyWorksPaginationCallback, get_my_works_pagination_kb,
-                       get_master_profile_edit_kb, MasterProfileEditCallback)
-from database import TattooWork, User, MasterProfile, Category
+                       get_master_profile_edit_kb, MasterProfileEditCallback, get_master_review_keyboard,
+                       MasterReviewCallback) # Добавили get_master_review_keyboard и MasterReviewCallback
+from database import TattooWork, User, MasterProfile, Category, Review # Добавили Review
+
 
 router = Router()
 crypto_api = CryptoAPI(token=settings.crypto_api_token.get_secret_value())
@@ -383,3 +385,133 @@ async def process_edit_socials(message: Message, state: FSMContext, session: Asy
     await session.commit()
     await state.clear()
     await message.answer("✅ Ваша социальная сеть успешно обновлена!", reply_markup=get_main_menu_kb(user_role='master'))
+
+
+# --- НОВЫЙ БЛОК: ПРОСМОТР И ОТВЕТ НА ОТЗЫВЫ ---
+
+async def get_review_text_for_master(review: Review, session: AsyncSession) -> str:
+    """Формирует текст отзыва для мастера."""
+    client = await session.get(User, review.client_id)
+    rating_stars = "⭐" * review.rating + "☆" * (5 - review.rating)
+
+    text = (
+        f"<b>Отзыв #{review.id} от клиента @{client.username or 'скрыт'}</b>\n\n"
+        f"<b>Оценка:</b> {rating_stars}\n"
+        f"<b>Текст отзыва:</b>\n<i>{review.text}</i>\n\n"
+        "<b>Ваш ответ:</b>\n"
+        f"<i>{review.admin_reply or 'Вы еще не ответили.'}</i>"
+    )
+    return text
+
+
+async def show_master_review(query: CallbackQuery, session: AsyncSession, master_id: int, review_id: int = None,
+                             direction: str = 'first'):
+    """Отображает отзывы для мастера с пагинацией."""
+    stmt = None
+    if direction == 'first':
+        stmt = select(Review).where(Review.master_id == master_id).order_by(desc(Review.id)).limit(1)
+    elif direction == 'next':
+        stmt = select(Review).where(Review.master_id == master_id, Review.id < review_id).order_by(
+            desc(Review.id)).limit(1)
+    elif direction == 'prev':
+        stmt = select(Review).where(Review.master_id == master_id, Review.id > review_id).order_by(
+            asc(Review.id)).limit(1)
+    # Добавляем условие для обновления после ответа
+    elif direction is None and review_id is not None:
+        stmt = select(Review).where(Review.id == review_id)
+
+    review = await session.scalar(stmt)
+
+    if not review:
+        if direction == 'first':
+            await query.message.edit_text("У вас пока нет ни одного отзыва.")
+        else:
+            await query.answer("Это последний отзыв в списке.", show_alert=True)
+        return
+
+    text = await get_review_text_for_master(review, session)
+    keyboard = get_master_review_keyboard(review.id)
+
+    # Проверяем, есть ли у сообщения метод edit_text, чтобы избежать ошибки
+    if hasattr(query.message, 'edit_text'):
+        await query.message.edit_text(text, reply_markup=keyboard)
+    else:
+        # Если это новое сообщение (как после ответа мастера), отправляем его
+        await query.message.answer(text, reply_markup=keyboard)
+
+    await query.answer()
+
+
+@router.callback_query(F.data == "master_reviews_view")
+async def view_master_reviews_start(query: CallbackQuery, session: AsyncSession):
+    master_profile = await session.scalar(
+        select(MasterProfile).join(User).where(User.telegram_id == query.from_user.id)
+    )
+    if not master_profile:
+        await query.answer("Ваш профиль мастера не найден.", show_alert=True)
+        return
+
+    await show_master_review(query, session, master_id=master_profile.id, direction='first')
+
+
+@router.callback_query(MasterReviewCallback.filter(F.action.in_(['prev', 'next'])))
+async def paginate_master_reviews(query: CallbackQuery, callback_data: MasterReviewCallback, session: AsyncSession):
+    master_profile = await session.scalar(
+        select(MasterProfile).join(User).where(User.telegram_id == query.from_user.id)
+    )
+    if not master_profile:
+        await query.answer("Ваш профиль мастера не найден.", show_alert=True)
+        return
+
+    await show_master_review(query, session, master_id=master_profile.id, review_id=callback_data.review_id,
+                             direction=callback_data.action)
+
+
+@router.callback_query(MasterReviewCallback.filter(F.action == "reply"))
+async def start_master_reply(query: CallbackQuery, callback_data: MasterReviewCallback, state: FSMContext):
+    await state.set_state(MasterReviewReply.waiting_for_reply_text)
+    await state.update_data(review_id=callback_data.review_id)
+    await query.message.answer("Введите ваш ответ на этот отзыв:")
+    await query.answer()
+
+
+@router.message(MasterReviewReply.waiting_for_reply_text, F.text)
+async def process_master_reply(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    review_id = data.get("review_id")
+    reply_text = message.text
+
+    review = await session.get(Review, review_id)
+    if not review:
+        await message.answer("Ошибка: не удалось найти отзыв для ответа.")
+        await state.clear()
+        return
+
+    review.admin_reply = reply_text  # Используем то же поле, что и админ
+    await session.commit()
+    await state.clear()
+
+    await message.answer("✅ Ваш ответ сохранен.")
+
+    # Уведомление клиенту
+    client = None
+    try:
+        client = await session.get(User, review.client_id)
+        # Для уведомления нам нужен профиль мастера
+        master_profile = await session.get(MasterProfile, review.master_id)
+        master_user = await session.get(User, master_profile.user_id)
+        if client:
+            await message.bot.send_message(
+                client.telegram_id,
+                f"Мастер @{master_user.username or '...'} ответил на ваш отзыв:\n\n<i>{reply_text}</i>"
+            )
+    except Exception as e:
+        client_id_for_log = client.telegram_id if client else "unknown"
+        logging.error(f"Не удалось отправить уведомление клиенту {client_id_for_log}: {e}")
+
+    # Показываем обновленный отзыв мастеру
+    master_profile = await session.scalar(
+        select(MasterProfile).join(User).where(User.telegram_id == message.from_user.id)
+    )
+    fake_query = types.CallbackQuery(id="fake", from_user=message.from_user, chat_instance="", message=message)
+    await show_master_review(fake_query, session, master_id=master_profile.id, review_id=review_id, direction=None)
