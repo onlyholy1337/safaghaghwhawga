@@ -4,13 +4,15 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InputMed
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, asc, desc
+from sqlalchemy.orm import selectinload
 import logging
 
 from states import WorkSubmission, MasterProfileEdit
 from crypto_api import CryptoAPI
 from config import settings
 from keyboards import (get_payment_kb, get_main_menu_kb, PaymentCallback, get_admin_moderation_kb,
-                       get_master_profile_kb, MyWorksPaginationCallback, get_my_works_pagination_kb)
+                       get_master_profile_kb, MyWorksPaginationCallback, get_my_works_pagination_kb,
+                       get_master_profile_edit_kb, MasterProfileEditCallback)
 from database import TattooWork, User, MasterProfile, Category
 
 router = Router()
@@ -249,7 +251,8 @@ async def show_my_work_func(message_or_query, session: AsyncSession, master_prof
 @router.message(F.text == "📂 Мои работы")
 async def my_works_start(message: Message, session: AsyncSession):
     master_profile = await session.scalar(
-        select(MasterProfile).join(User).where(User.telegram_id == message.from_user.id)
+        select(MasterProfile).join(User).where(User.telegram_id == message.from_user.id).options(
+            selectinload(MasterProfile.works))
     )
     if not master_profile:
         await message.answer("Не удалось найти ваш профиль мастера.")
@@ -260,7 +263,8 @@ async def my_works_start(message: Message, session: AsyncSession):
 @router.callback_query(MyWorksPaginationCallback.filter())
 async def my_works_paginated(query: CallbackQuery, callback_data: MyWorksPaginationCallback, session: AsyncSession):
     master_profile = await session.scalar(
-        select(MasterProfile).join(User).where(User.telegram_id == query.from_user.id)
+        select(MasterProfile).join(User).where(User.telegram_id == query.from_user.id).options(
+            selectinload(MasterProfile.works))
     )
     if not master_profile:
         await query.answer("Профиль не найден.", show_alert=True)
@@ -272,15 +276,8 @@ async def my_works_paginated(query: CallbackQuery, callback_data: MyWorksPaginat
 
 # --- ПРОФИЛЬ МАСТЕРА И РЕДАКТИРОВАНИЕ ---
 
-@router.message(F.text == "👤 Мой профиль")
-async def show_my_profile(message: Message, session: AsyncSession):
-    master_profile = await session.scalar(
-        select(MasterProfile).join(User).where(User.telegram_id == message.from_user.id)
-    )
-    if not master_profile:
-        await message.answer("Не удалось найти ваш профиль мастера.")
-        return
-
+async def get_profile_text(master_profile: MasterProfile) -> str:
+    """Формирует текст профиля мастера."""
     profile_text = (
         f"<b>Ваш профиль мастера:</b>\n\n"
         f"<b>Город:</b> {master_profile.city}\n"
@@ -289,16 +286,52 @@ async def show_my_profile(message: Message, session: AsyncSession):
     if master_profile.social_links:
         links = [link['url'] for link in master_profile.social_links]
         profile_text += f"\n<b>Соц. сети:</b> {', '.join(links)}"
+    return profile_text
 
+
+@router.message(F.text == "👤 Мой профиль")
+async def show_my_profile_handler(message: Message, session: AsyncSession):
+    master_profile = await session.scalar(
+        select(MasterProfile).join(User).where(User.telegram_id == message.from_user.id)
+    )
+    if not master_profile:
+        await message.answer("Не удалось найти ваш профиль мастера.")
+        return
+
+    profile_text = await get_profile_text(master_profile)
     await message.answer(profile_text, reply_markup=get_master_profile_kb())
+
+
+@router.callback_query(F.data == "show_my_profile")
+async def show_my_profile_callback(query: CallbackQuery, session: AsyncSession, state: FSMContext):
+    await state.clear()
+    master_profile = await session.scalar(
+        select(MasterProfile).join(User).where(User.telegram_id == query.from_user.id)
+    )
+    if not master_profile:
+        await query.message.edit_text("Не удалось найти ваш профиль мастера.")
+        await query.answer()
+        return
+
+    profile_text = await get_profile_text(master_profile)
+    await query.message.edit_text(profile_text, reply_markup=get_master_profile_kb())
+    await query.answer()
 
 
 @router.callback_query(F.data == "edit_master_profile")
 async def start_edit_profile(query: CallbackQuery, state: FSMContext):
     await state.set_state(MasterProfileEdit.waiting_for_choice)
-    # Пока что можно изменить только город
-    await query.message.answer("Введите новый город:")
+    await query.message.edit_text(
+        "Выберите, что вы хотите изменить:",
+        reply_markup=get_master_profile_edit_kb()
+    )
+    await query.answer()
+
+
+@router.callback_query(MasterProfileEditCallback.filter(F.action == 'city'))
+async def ask_for_new_city(query: CallbackQuery, state: FSMContext):
     await state.set_state(MasterProfileEdit.waiting_for_new_city)
+    await query.message.edit_text("Введите новый город:")
     await query.answer()
 
 
@@ -312,3 +345,41 @@ async def process_edit_city(message: Message, state: FSMContext, session: AsyncS
     await session.commit()
     await state.clear()
     await message.answer("✅ Ваш город успешно обновлен!", reply_markup=get_main_menu_kb(user_role='master'))
+
+
+@router.callback_query(MasterProfileEditCallback.filter(F.action == 'description'))
+async def ask_for_new_description(query: CallbackQuery, state: FSMContext):
+    await state.set_state(MasterProfileEdit.waiting_for_new_description)
+    await query.message.edit_text("Введите новое описание для вашего профиля:")
+    await query.answer()
+
+
+@router.message(MasterProfileEdit.waiting_for_new_description, F.text)
+async def process_edit_description(message: Message, state: FSMContext, session: AsyncSession):
+    new_description = message.text
+    master_profile = await session.scalar(
+        select(MasterProfile).join(User).where(User.telegram_id == message.from_user.id)
+    )
+    master_profile.description = new_description
+    await session.commit()
+    await state.clear()
+    await message.answer("✅ Ваше описание успешно обновлено!", reply_markup=get_main_menu_kb(user_role='master'))
+
+
+@router.callback_query(MasterProfileEditCallback.filter(F.action == 'socials'))
+async def ask_for_new_socials(query: CallbackQuery, state: FSMContext):
+    await state.set_state(MasterProfileEdit.waiting_for_new_socials)
+    await query.message.edit_text("Отправьте новую ссылку на вашу социальную сеть:")
+    await query.answer()
+
+
+@router.message(MasterProfileEdit.waiting_for_new_socials, F.text)
+async def process_edit_socials(message: Message, state: FSMContext, session: AsyncSession):
+    new_social_link = message.text
+    master_profile = await session.scalar(
+        select(MasterProfile).join(User).where(User.telegram_id == message.from_user.id)
+    )
+    master_profile.social_links = [{"name": "link", "url": new_social_link}]
+    await session.commit()
+    await state.clear()
+    await message.answer("✅ Ваша социальная сеть успешно обновлена!", reply_markup=get_main_menu_kb(user_role='master'))

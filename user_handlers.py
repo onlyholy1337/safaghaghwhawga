@@ -120,7 +120,7 @@ async def show_work(message_or_query, session: AsyncSession, work_id: int = None
         message = message_or_query
         user_id = message.from_user.id
 
-    base_stmt = select(TattooWork).where(TattooWork.status == 'published')
+    base_stmt = select(TattooWork).options(selectinload(TattooWork.category)).where(TattooWork.status == 'published')
     if category_id:
         base_stmt = base_stmt.where(TattooWork.category_id == category_id)
 
@@ -274,7 +274,7 @@ async def show_masters_list(message: types.Message, session: AsyncSession, page:
     per_page = 1
     offset = (page - 1) * per_page
 
-    base_query = select(MasterProfile).join(User).where(MasterProfile.is_active == True)
+    base_query = select(MasterProfile).join(User).where(MasterProfile.is_active == True).options(selectinload(MasterProfile.user))
     if city:
         base_query = base_query.where(func.lower(MasterProfile.city) == city.lower())
 
@@ -478,36 +478,42 @@ async def show_comments(query: CallbackQuery, session: AsyncSession, work_id: in
     total_comments_count = await session.scalar(select(func.count(Comment.id)).where(Comment.work_id == work_id))
     total_pages = ceil(total_comments_count / COMMENTS_PER_PAGE)
 
-    if total_pages == 0 and page == 1:
-        await query.message.edit_text(
-            "Комментариев пока нет.",
-            reply_markup=get_comments_keyboard(work_id, total_pages, page)
-        )
-        await query.answer()
-        return
-
-    offset = (page - 1) * COMMENTS_PER_PAGE
-    comments_result = await session.execute(
-        select(Comment)
-        .where(Comment.work_id == work_id)
-        .options(selectinload(Comment.user))
-        .order_by(desc(Comment.created_at))
-        .limit(COMMENTS_PER_PAGE)
-        .offset(offset)
-    )
-    comments = comments_result.scalars().all()
-
     text = f"<b>Комментарии к работе #{work_id} (Страница {page}/{total_pages})</b>\n\n"
 
-    for comment in comments:
-        username = comment.user.username or f"user{comment.user.telegram_id}"
-        text += f"👤 <b>@{username}</b>: <i>{comment.text}</i>\n\n"
+    if total_pages == 0 and page == 1:
+        text = "Комментариев пока нет."
+    else:
+        offset = (page - 1) * COMMENTS_PER_PAGE
+        comments_result = await session.execute(
+            select(Comment)
+            .where(Comment.work_id == work_id)
+            .options(selectinload(Comment.user))
+            .order_by(desc(Comment.created_at))
+            .limit(COMMENTS_PER_PAGE)
+            .offset(offset)
+        )
+        comments = comments_result.scalars().all()
 
-    await query.message.edit_text(
-        text,
-        reply_markup=get_comments_keyboard(work_id, total_pages, page),
-        disable_web_page_preview=True
-    )
+        for comment in comments:
+            username = comment.user.username or f"user{comment.user.telegram_id}"
+            text += f"👤 <b>@{username}</b>: <i>{comment.text}</i>\n\n"
+
+    # Проверяем, есть ли у сообщения фото, чтобы избежать ошибки при редактировании
+    if query.message.photo:
+        # Если это было сообщение с фото, удаляем его и отправляем новое текстовое
+        await query.message.delete()
+        await query.message.answer(
+            text,
+            reply_markup=get_comments_keyboard(work_id, total_pages, page),
+            disable_web_page_preview=True
+        )
+    else:
+        # Если это уже было текстовое сообщение (пагинация), редактируем его
+        await query.message.edit_text(
+            text,
+            reply_markup=get_comments_keyboard(work_id, total_pages, page),
+            disable_web_page_preview=True
+        )
     await query.answer()
 
 
@@ -538,7 +544,28 @@ async def show_master_profile(query: CallbackQuery, callback_data: MasterCallbac
 
 
 # --- РАЗДЕЛЫ В РАЗРАБОТКЕ ---
+@router.message(F.text == "❓ FAQ")
+async def faq_section(message: Message):
+    faq_text = """
+Часто задаваемые вопросы:
 
-@router.message(F.text.in_({"❓ FAQ", "📞 Контакты"}))
-async def menu_in_development(message: Message):
-    await message.answer("Этот раздел находится в разработке...")
+В: Как мне стать мастером?
+О: Нажмите кнопку "Стать мастером" в главном меню и следуйте инструкциям.
+
+В: Как я могу оплатить размещение работы?
+О: Мы используем Crypto Bot для приема платежей. После загрузки работы вы получите ссылку для оплаты.
+
+В: Как рассчитывается рейтинг мастера?
+О: Рейтинг формируется на основе оценок, которые пользователи ставят в своих отзывах.
+"""
+    await message.answer(faq_text)
+
+
+@router.message(F.text == "📞 Контакты")
+async def contacts_section(message: Message):
+    contacts_text = """
+Связь с нами:
+Telegram: @telegram_contact
+Email: support@example.com
+"""
+    await message.answer(contacts_text)

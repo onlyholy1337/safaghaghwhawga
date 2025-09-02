@@ -25,6 +25,7 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(100), nullable=True)
     full_name: Mapped[str] = mapped_column(String(150))
     role: Mapped[str] = mapped_column(String(50), default='client')
+    master_profile: Mapped["MasterProfile"] = relationship(back_populates="user")
 
 
 class MasterProfile(Base):
@@ -36,6 +37,8 @@ class MasterProfile(Base):
     social_links: Mapped[List[dict]] = mapped_column(SA_JSON, nullable=True)
     is_active: Mapped[bool] = mapped_column(default=True)
     rating: Mapped[float] = mapped_column(DECIMAL(3, 2), nullable=True, default=0.0)
+    user: Mapped["User"] = relationship(back_populates="master_profile")
+    works: Mapped[List["TattooWork"]] = relationship()
 
 
 class Category(Base):
@@ -57,8 +60,8 @@ class TattooWork(Base):
     invoice_id: Mapped[int] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
+    master: Mapped["MasterProfile"] = relationship(back_populates="works")
     category: Mapped["Category"] = relationship()
-    # --- НОВАЯ СВЯЗЬ ДЛЯ КОММЕНТАРИЕВ ---
     comments: Mapped[List["Comment"]] = relationship(back_populates="work", cascade="all, delete-orphan")
 
 

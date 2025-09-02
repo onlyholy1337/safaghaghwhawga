@@ -10,6 +10,16 @@ from database import Category
 
 # --- CALLBACKS ---
 
+class MasterProfileEditCallback(CallbackData, prefix="master_edit"):
+    action: str  # 'city', 'description', 'socials'
+
+
+class MasterReviewsPagination(CallbackData, prefix="master_reviews_pag"):
+    action: str  # 'view', 'prev', 'next'
+    master_id: int
+    page: int
+
+
 class MasterSearchCallback(CallbackData, prefix="master_search"):
     action: str  # 'show_all', 'by_city'
 
@@ -65,7 +75,6 @@ class LikeCallback(CallbackData, prefix="like"):
     work_id: int
 
 
-# --- НОВЫЕ CALLBACKS ДЛЯ КОММЕНТАРИЕВ ---
 class CommentCallback(CallbackData, prefix="comment"):
     action: str  # 'create', 'view'
     work_id: int
@@ -76,8 +85,6 @@ class CommentPaginationCallback(CallbackData, prefix="comm_pag"):
     work_id: int
     page: int
 
-
-# -----------------------------------------
 
 class ReviewCallback(CallbackData, prefix="review"):
     action: str
@@ -150,8 +157,8 @@ def get_master_search_options_kb() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_master_list_pagination_kb(total_pages: int, current_page: int,
-                                  city: Optional[str] = None) -> InlineKeyboardMarkup:
+def get_master_list_pagination_kb(total_pages: int, current_page: int, city: Optional[str] = None,
+                                  master_id: Optional[int] = None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     prev_page = current_page - 1
@@ -164,17 +171,26 @@ def get_master_list_pagination_kb(total_pages: int, current_page: int,
                                  callback_data=MasterListPagination(action="prev", page=prev_page, city=city).pack())
         )
 
-    nav_buttons.append(
-        InlineKeyboardButton(text=f"{current_page}/{total_pages}", callback_data="do_nothing")
-    )
+    if total_pages > 0:
+        nav_buttons.append(
+            InlineKeyboardButton(text=f"{current_page}/{total_pages}", callback_data="do_nothing")
+        )
 
     if current_page < total_pages:
         nav_buttons.append(
             InlineKeyboardButton(text="➡️",
                                  callback_data=MasterListPagination(action="next", page=next_page, city=city).pack())
         )
+    if nav_buttons:
+        builder.row(*nav_buttons)
 
-    builder.row(*nav_buttons)
+    if master_id:
+        builder.row(
+            InlineKeyboardButton(
+                text="Читать отзывы",
+                callback_data=MasterReviewsPagination(action="view", master_id=master_id, page=1).pack()
+            )
+        )
     return builder.as_markup()
 
 
@@ -204,18 +220,16 @@ def get_category_filter_kb(categories: List[Category]) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-# --- ИЗМЕНЕННАЯ КЛАВИАТУРА ПРОСМОТРА РАБОТЫ ---
 def get_pagination_kb(
         current_work_id: int,
         master_id: int,
         likes_count: int,
         is_liked: bool,
-        comments_count: int,  # Добавили счетчик комментариев
+        comments_count: int,
         category_id: Optional[int] = None
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
-    # Кнопки пагинации "вперед-назад"
     builder.row(
         InlineKeyboardButton(
             text="⬅️",
@@ -229,7 +243,6 @@ def get_pagination_kb(
         )
     )
 
-    # Кнопки лайка и отзыва
     like_text = f"❤️ {likes_count}" if not is_liked else f"💔 {likes_count}"
     builder.row(
         InlineKeyboardButton(
@@ -242,7 +255,6 @@ def get_pagination_kb(
         )
     )
 
-    # --- НОВЫЕ КНОПКИ КОММЕНТАРИЕВ ---
     builder.row(
         InlineKeyboardButton(
             text=f"💬 Комментарии ({comments_count})",
@@ -254,7 +266,6 @@ def get_pagination_kb(
         )
     )
 
-    # Кнопка профиля мастера
     builder.row(
         InlineKeyboardButton(
             text="👤 Профиль мастера",
@@ -262,9 +273,6 @@ def get_pagination_kb(
         )
     )
     return builder.as_markup()
-
-
-# -----------------------------------------
 
 
 def get_my_works_pagination_kb(work_id: int) -> InlineKeyboardMarkup:
@@ -369,7 +377,6 @@ def get_admin_payment_keyboard(work_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-# --- НОВАЯ КЛАВИАТУРА ДЛЯ ПРОСМОТРА КОММЕНТАРИЕВ ---
 def get_comments_keyboard(work_id: int, total_pages: int, current_page: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
@@ -399,9 +406,6 @@ def get_comments_keyboard(work_id: int, total_pages: int, current_page: int) -> 
             action="return_to_work", current_work_id=work_id).pack())
     )
     return builder.as_markup()
-
-
-# ---------------------------------------------
 
 
 def get_rating_kb() -> InlineKeyboardMarkup:
@@ -458,4 +462,56 @@ def get_admin_user_manage_kb(user_id: int, is_active: bool) -> InlineKeyboardMar
 def get_master_profile_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="✏️ Редактировать профиль", callback_data="edit_master_profile"))
+    return builder.as_markup()
+
+
+def get_master_profile_edit_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="✏️ Изменить город",
+            callback_data=MasterProfileEditCallback(action="city").pack()
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="📝 Изменить описание",
+            callback_data=MasterProfileEditCallback(action="description").pack()
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="🔗 Изменить соц. сеть",
+            callback_data=MasterProfileEditCallback(action="socials").pack()
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="show_my_profile")
+    )
+    return builder.as_markup()
+
+
+def get_master_reviews_kb(master_id: int, total_pages: int, current_page: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    nav_buttons = []
+    if current_page > 1:
+        nav_buttons.append(
+            InlineKeyboardButton(text="⬅️", callback_data=MasterReviewsPagination(
+                action="prev", page=current_page - 1, master_id=master_id).pack())
+        )
+    if total_pages > 0:
+        nav_buttons.append(
+            InlineKeyboardButton(text=f"{current_page}/{total_pages}", callback_data="do_nothing")
+        )
+    if current_page < total_pages:
+        nav_buttons.append(
+            InlineKeyboardButton(text="➡️", callback_data=MasterReviewsPagination(
+                action="next", page=current_page + 1, master_id=master_id).pack())
+        )
+    if nav_buttons:
+        builder.row(*nav_buttons)
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Назад к профилю", callback_data=MasterCallback(
+            action="view", master_id=master_id).pack())
+    )
     return builder.as_markup()
