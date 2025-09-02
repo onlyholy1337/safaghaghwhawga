@@ -5,14 +5,16 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, desc, asc, func
+import asyncio
+import logging
 
 from keyboards import (get_admin_category_manage_kb, AdminMenuCallback,
                        AdminCategoryCallback, get_admin_main_kb, AdminReviewCallback,
-                       get_admin_review_keyboard, get_admin_stats_kb)
+                       get_admin_review_keyboard, get_admin_stats_kb,
+                       AdminMailingCallback, get_admin_mailing_confirm_kb)
 from database import Category, Review, User, MasterProfile, TattooWork
-from states import AdminCategoryManagement, AdminReviewManagement
+from states import AdminCategoryManagement, AdminReviewManagement, AdminMailing
 from admin_handlers import IsAdmin
-import logging
 
 router = Router()
 router.message.filter(IsAdmin())
@@ -22,7 +24,8 @@ router.callback_query.filter(IsAdmin())
 # --- ОБРАБОТКА ГЛАВНОГО МЕНЮ АДМИНКИ ---
 
 @router.callback_query(AdminMenuCallback.filter(F.action == "main"))
-async def back_to_main_admin_menu(query: CallbackQuery):
+async def back_to_main_admin_menu(query: CallbackQuery, state: FSMContext):
+    await state.clear()
     await query.message.edit_text(
         "Добро пожаловать в админ-панель!",
         reply_markup=get_admin_main_kb()
@@ -30,7 +33,7 @@ async def back_to_main_admin_menu(query: CallbackQuery):
 
 
 @router.callback_query(AdminMenuCallback.filter(F.action.in_([
-    "work_management", "payment_management", "mailing"
+    "work_management", "payment_management"
 ])))
 async def section_in_development(query: CallbackQuery):
     await query.answer("Этот раздел находится в разработке.", show_alert=True)
@@ -230,3 +233,66 @@ async def show_statistics(query: CallbackQuery, session: AsyncSession):
 
     await query.message.edit_text(stats_text, reply_markup=get_admin_stats_kb())
     await query.answer()
+
+
+# --- РАССЫЛКА ---
+
+@router.callback_query(AdminMenuCallback.filter(F.action == "mailing"))
+async def start_mailing(query: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminMailing.waiting_for_message_content)
+    await query.message.edit_text(
+        "Введите сообщение для рассылки.\n"
+        "Оно будет отправлено <b>всем</b> пользователям бота.\n\n"
+        "Вы можете использовать HTML-теги для форматирования."
+    )
+    await query.answer()
+
+
+@router.message(AdminMailing.waiting_for_message_content)
+async def mailing_content_received(message: Message, state: FSMContext):
+    await state.update_data(text=message.html_text)
+    await state.set_state(AdminMailing.waiting_for_confirmation)
+
+    await message.answer(
+        "<b>Предпросмотр сообщения:</b>\n\n"
+        f"{message.html_text}\n\n"
+        "Отправляем?",
+        reply_markup=get_admin_mailing_confirm_kb()
+    )
+
+
+@router.callback_query(AdminMailing.waiting_for_confirmation, AdminMailingCallback.filter(F.action == "cancel"))
+async def cancel_mailing(query: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await query.message.edit_text("Рассылка отменена.", reply_markup=None)
+    await query.answer()
+
+
+@router.callback_query(AdminMailing.waiting_for_confirmation, AdminMailingCallback.filter(F.action == "send"))
+async def process_mailing(query: CallbackQuery, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    text = data.get("text")
+    await state.clear()
+
+    await query.message.edit_text("⏳ Начинаю рассылку...", reply_markup=None)
+
+    users_result = await session.execute(select(User.telegram_id))
+    user_ids = users_result.scalars().all()
+
+    successful_sends = 0
+    failed_sends = 0
+
+    for user_id in user_ids:
+        try:
+            await query.bot.send_message(chat_id=user_id, text=text, disable_web_page_preview=True)
+            successful_sends += 1
+        except Exception as e:
+            failed_sends += 1
+            logging.error(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+        await asyncio.sleep(0.1)
+
+    await query.message.answer(
+        "✅ <b>Рассылка завершена.</b>\n\n"
+        f"Успешно отправлено: <b>{successful_sends}</b>\n"
+        f"Ошибок: <b>{failed_sends}</b>"
+    )

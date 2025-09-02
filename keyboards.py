@@ -45,6 +45,11 @@ class AdminReviewCallback(CallbackData, prefix="admin_review"):
     review_id: int
 
 
+# --- НОВЫЙ CALLBACK ДЛЯ РАССЫЛКИ ---
+class AdminMailingCallback(CallbackData, prefix="admin_mail"):
+    action: str  # 'send', 'cancel'
+
+
 class WorkPaginationCallback(CallbackData, prefix="work_pag"):
     action: str
     current_work_id: int
@@ -297,6 +302,15 @@ def get_admin_stats_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data=AdminMenuCallback(action="main").pack())
+    )
+    return builder.as_markup()
+
+# --- НОВАЯ КЛАВИАТУРА ДЛЯ ПОДТВЕРЖДЕНИЯ РАССЫЛКИ ---
+def get_admin_mailing_confirm_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ Отправить всем", callback_data=AdminMailingCallback(action="send").pack()),
+        InlineKeyboardButton(text="❌ Отмена", callback_data=AdminMailingCallback(action="cancel").pack())
     )
     return builder.as_markup()
 
